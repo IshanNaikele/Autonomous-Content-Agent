@@ -1,59 +1,113 @@
-# video.py
-from fastapi import FastAPI
-from pydantic import BaseModel
-from huggingface_hub import InferenceClient
-import base64
-import io
 import os
-import requests
+from moviepy.editor import ImageClip, concatenate_videoclips
+from pydub import AudioSegment
+import subprocess
 
-app = FastAPI()
+# =======================
+# CONFIG
+# =======================
+IMAGE_FOLDER = "generated_content"
+AUDIO_INPUT = "output_60_seconds.mp3"
+OUTPUT_VIDEO = "final_video_FIXED.mp4"
+DURATION_PER_IMAGE = 5
 
-HF_TOKEN = os.getenv("HF_TOKEN")
-if not HF_TOKEN:
-    raise ValueError("HF_TOKEN not set")
+# =======================
+# STEP 1 — FIX AUDIO (CONVERT TO WAV FOR COMPATIBILITY)
+# =======================
+print("🎵 Converting audio to WAV format...")
 
-client = InferenceClient(token=HF_TOKEN)
+audio = AudioSegment.from_mp3(AUDIO_INPUT)
 
-SVD_API_URL = "https://router.huggingface.co/models/stabilityai/stable-video-diffusion-img2vid"
+# Force stereo
+if audio.channels == 1:
+    audio = audio.set_channels(2)
 
-class Prompt(BaseModel):
-    prompt: str
+# Boost volume
+audio = audio + 15
 
-@app.post("/text_to_video_free")
-def text_to_video_free(data: Prompt):
-    # ----------------------
-    # STEP 1 – TEXT → IMAGE
-    # ----------------------
-    try:
-        image = client.text_to_image(
-            prompt=data.prompt,
-            model="black-forest-labs/FLUX.1-dev"
-        )
+# Normalize
+audio = audio.normalize()
 
-        buf = io.BytesIO()
-        image.save(buf, format="PNG")
-        img_bytes = buf.getvalue()
+# Export as WAV (most compatible)
+AUDIO_WAV = "audio_fixed.wav"
+audio.export(AUDIO_WAV, format="wav", parameters=["-ar", "44100"])
 
-    except Exception as e:
-        return {"error": f"FLUX image generation failed: {e}"}
+print(f"✔ Audio converted to WAV")
 
-    # ----------------------
-    # STEP 2 – IMAGE → VIDEO
-    # ----------------------
-    try:
-        headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-        files = {"file": ("image.png", img_bytes, "image/png")}
+# =======================
+# STEP 2 — LOAD IMAGES
+# =======================
+all_images = sorted([
+    os.path.join(IMAGE_FOLDER, f)
+    for f in os.listdir(IMAGE_FOLDER)
+    if f.lower().endswith(".png")
+])
 
-        resp = requests.post(SVD_API_URL, headers=headers, files=files)
+if len(all_images) < 12:
+    raise Exception(f"❌ Need 12 images, found only {len(all_images)}")
 
-        if resp.status_code != 200:
-            return {"error": f"SVD failed: {resp.text}"}
+images = all_images[:12]
+print(f"✔ Loaded {len(images)} images")
 
-        video_bytes = resp.content
+# =======================
+# STEP 3 — CREATE SILENT VIDEO
+# =======================
+print("🎬 Creating video...")
 
-    except Exception as e:
-        return {"error": f"SVD video generation failed: {e}"}
+clips = [ImageClip(img).set_duration(DURATION_PER_IMAGE) for img in images]
+slideshow = concatenate_videoclips(clips, method="compose")
 
-    encoded = base64.b64encode(video_bytes).decode()
-    return {"video_base64": encoded}
+temp_video = "temp_silent.mp4"
+slideshow.write_videofile(
+    temp_video, 
+    fps=24, 
+    codec="libx264", 
+    audio=False,
+    verbose=False,
+    logger=None
+)
+
+print("✔ Silent video created")
+
+# =======================
+# STEP 4 — MERGE WITH PROPER SETTINGS
+# =======================
+print("🔊 Merging video and audio with FFmpeg...")
+
+try:
+    # This command ensures maximum compatibility
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", temp_video,
+        "-i", AUDIO_WAV,
+        "-c:v", "libx264",          # Re-encode video
+        "-preset", "medium",
+        "-crf", "23",
+        "-c:a", "aac",              # AAC audio codec
+        "-b:a", "192k",             # Audio bitrate
+        "-ar", "44100",             # Sample rate
+        "-ac", "2",                 # Stereo
+        "-pix_fmt", "yuv420p",      # Pixel format for compatibility
+        "-movflags", "+faststart",  # Web optimization
+        "-shortest",
+        OUTPUT_VIDEO
+    ], check=True, capture_output=True, text=True)
+    
+    print("✔ Video merged successfully!")
+    
+    # Cleanup
+    os.remove(temp_video)
+    os.remove(AUDIO_WAV)
+    
+    print(f"\n🎉 DONE! Video saved: {OUTPUT_VIDEO}")
+    print("\n📋 Try playing it with:")
+    print("   1. VLC Media Player (recommended)")
+    print("   2. Windows Media Player")
+    print("   3. Any modern browser (drag & drop)")
+    
+except subprocess.CalledProcessError as e:
+    print(f"❌ FFmpeg Error:")
+    print(e.stderr)
+
+except Exception as e:
+    print(f"❌ Error: {e}")

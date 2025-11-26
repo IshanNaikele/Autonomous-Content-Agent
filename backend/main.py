@@ -1,4 +1,4 @@
-# backend/main.py (MODIFIED to remove platform_constraint and change prompt structure)
+# backend/main.py (FINAL CODE - Image Variation and Quality Optimized)
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, PositiveInt
@@ -7,6 +7,8 @@ import os
 import json
 import time 
 import requests
+import random # For random seed and prompt variation selection
+
 # --- API CLIENTS ---
 from groq import Groq
 from google import genai
@@ -15,7 +17,6 @@ from google.genai import types
 
 # --- 1. Pydantic Schemas for Input and Output ---
 
-# Input Schema (ContentRequest) - REMOVED platform_constraint
 class ContentRequest(BaseModel):
     topic_idea: str = Field(..., max_length=500, description="The main subject or idea for the content.")
     primary_format: Literal['Blog Post', 'Image', 'Video'] = Field(..., description="The main deliverable format.")
@@ -24,27 +25,23 @@ class ContentRequest(BaseModel):
     word_count: Optional[PositiveInt] = Field(None, description="Required word count for Blog Post (must be >= 1).")
     video_duration_seconds: Optional[PositiveInt] = Field(None, description="Required duration for Video format in seconds (must be >= 1).")
     
-    # REMOVED: platform_constraint
     target_audience: str = Field(..., description="Persona of the primary reader/viewer.")
     business_goal: Literal['Awareness', 'Lead Generation', 'Conversion', 'Engagement'] = Field(..., description="The goal this content must achieve.")
     brand_tone: Literal['Expert & Formal', 'Friendly & Witty', 'Casual & Rebellious'] = Field(..., description="The required tone of voice.")
     brand_color_hex: Optional[str] = Field(None, description="Primary brand color (e.g., #007bff)")
 
-# Output Schema for Research (Removed platform_best_practices)
 class ResearchData(BaseModel):
     target_keywords: List[str] = Field(..., description="3-5 inferred high-value keywords.")
     top_competitor_urls: List[str] = Field(..., description="The top 5 URLs found by the search engine.")
     content_gap_analysis: str = Field(..., description="The unique angle/topic the competition missed.")
-    # REMOVED: platform_best_practices
 
-# Output Schema for Synthesis (Blueprint) - Changed to output the final 3 prompts
 class CreativeBlueprint(BaseModel):
     blog_text_prompt: str = Field(..., description="The single, complete prompt for the Blog/Text generation agent.")
     image_prompt: str = Field(..., description="The single, complete prompt for the Image generation agent.")
     video_prompt: str = Field(..., description="The single, complete prompt for the Video generation agent.")
 
 
-# --- 2. API CLIENT INITIALIZATION (Remains the same) ---
+# --- 2. API CLIENT INITIALIZATION ---
 try:
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -52,20 +49,20 @@ try:
     HF_TOKEN = os.getenv("HF_TOKEN")
 
     if not all([GROQ_API_KEY, GEMINI_API_KEY, TAVILY_API_KEY, HF_TOKEN]):
-        raise ValueError("One or more API keys (GROQ_API_KEY, GEMINI_API_KEY, TAVILY_API_KEY, HF_TOKEN) are missing from environment variables.")
+        # Removed the raising of an error here to allow the app to initialize but still print the error
+        print("One or more API keys (GROQ_API_KEY, GEMINI_API_KEY, TAVILY_API_KEY, HF_TOKEN) are missing from environment variables.")
+        # We will handle the HTTPException inside the endpoint functions
+        groq_client, gemini_client, tavily_client = None, None, None
+    else:
+        groq_client = Groq(api_key=GROQ_API_KEY)
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+        tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
-
-except ValueError as e:
-    print(f"FATAL ERROR: API clients failed to initialize. {e}")
+except Exception as e:
+    print(f"FATAL ERROR: API clients failed to initialize unexpectedly. {e}")
     groq_client, gemini_client, tavily_client = None, None, None
 
-
 # --- 3. CORE PHASE 2 FUNCTIONS ---
-
-# Replace the research_and_gap_analysis function with this corrected version
 
 def research_and_gap_analysis(request: ContentRequest) -> ResearchData:
     """Steps 2.1 & 2.2: Uses Tavily for search, then Gemini for structured analysis."""
@@ -145,12 +142,12 @@ Search snippets:
 
 
 def strategic_synthesis_and_blueprint(request: ContentRequest, research_data: ResearchData) -> CreativeBlueprint:
-    """Step 2.3: Uses Groq for rapid synthesis and structured blueprint generation, outputting final prompts."""
+    """Step 2.3: Uses Groq/Gemini for rapid synthesis and structured blueprint generation, outputting final prompts."""
     
-    if not groq_client:
+    if not groq_client: # Using Groq for the main synthesis, but falling back to Gemini if needed/or configured to
         raise HTTPException(status_code=500, detail="Groq client not initialized.")
     
-    print("\n--- DEBUG: STEP 2.3 STARTING (Groq Synthesis) ---")
+    print("\n--- DEBUG: STEP 2.3 STARTING (Synthesis) ---")
 
     synthesis_prompt = f"""
 You are an elite Creative Strategist at a world-class AI Content Studio. Your mission is to transform the strategic intelligence provided below into a Unified Creative Blueprint. The output must be a single JSON object that contains three fields named blog_text_prompt, image_prompt, and video_prompt. Each field must contain plain English text only. Do not use backticks, markdown formatting, headings, bullets, numbered lists, or nested JSON. The text inside each field must be a single continuous paragraph. Do not escape quotes or newlines - write normal text. The content inside each field must be self-contained so that another agent, receiving that field alone, can generate exceptional output.
@@ -166,7 +163,7 @@ Format Specification: {request.primary_format}, Length: {request.word_count or r
 
 Your Task:
 Create three standalone prompt texts: one for generating a long-form blog article, one for generating a hero image, and one for generating a 30-second vertical video. Write everything as smooth, flowing paragraphs with normal punctuation.
-
+The prompt for image is like the image should have variation & it shows the actual product very nicely .
 Return ONLY valid JSON with this exact structure (no code fences, no markdown):
 {{"blog_text_prompt": "your blog prompt text here", "image_prompt": "your image prompt text here", "video_prompt": "your video prompt text here"}}
 """
@@ -187,7 +184,7 @@ Return ONLY valid JSON with this exact structure (no code fences, no markdown):
         # Clean the response
         blueprint_text = blueprint_text.replace('```json', '').replace('```', '').strip()
         
-        blueprint_data = json.loads(blueprint_text)   
+        blueprint_data = json.loads(blueprint_text)  
         
         # Ensure all fields are strings
         for key in ['blog_text_prompt', 'image_prompt', 'video_prompt']:
@@ -207,7 +204,52 @@ Return ONLY valid JSON with this exact structure (no code fences, no markdown):
         raise HTTPException(status_code=500, detail={"error": f"Synthesis failed: {e}", "raw_llm_response": blueprint_text if 'blueprint_text' in locals() else "No response"})
 
 
-# --- NEW: PHASE 3 GENERATION FUNCTIONS ---
+# --- IMAGE VARIATION HELPER (Optimized for Quality) ---
+
+def vary_image_prompt(base_prompt: str, index: int) -> str:
+    """
+    Creates distinct, high-quality prompts by injecting specific camera angles 
+    and lighting styles while preserving the original quality modifiers.
+    
+    This structured approach prevents quality degradation.
+    """
+    
+    # Zone 2: Composition Variations (Camera Angles/Framing)
+    composition_variations = [
+        "shot from a low angle, dramatic wide-angle cinematic framing",
+        "extreme close-up portrait, shallow depth of field (bokeh), subject in sharp focus",
+        "overhead flat lay view, minimalist studio background, clean and professional",
+        "medium shot, following the rule of thirds composition, leading lines, sense of scale",
+        "high-angle perspective, capturing the subject within a larger environmental context",
+        "an isometric 3D render, showcasing the product from the top-front view, clean interface",
+    ]
+    
+    # Zone 3: Style and Aesthetic Variations (Lighting/Mood) - Including high-quality stable modifiers
+    style_variations = [
+        "illuminated by dramatic rim lighting and deep shadows, rich contrast",
+        "soft, diffused daylight, warm pastel color palette, light atmosphere",
+        "vibrant, high-contrast neon glow, dynamic ambient light, futuristic aesthetic",
+        "golden hour sunlight streaming from the right, cinematic warm tones, volumetric light",
+        "moody, cinematic lighting, chiaroscuro style, emphasizing texture and materials",
+        "bright, high-key studio photography, soft shadows, professional advertisement look",
+    ]
+    
+    # Get indexed variation elements (using modulo for cycling through the list)
+    comp_tag = composition_variations[index % len(composition_variations)]
+    style_tag = style_variations[index % len(style_variations)]
+    
+    # Combine the base prompt (Zone 1: Quality/Subject) with the new zones
+    base_prompt = base_prompt.strip().rstrip(',').rstrip('.')
+    
+    # Re-inject high-quality, stable keywords upfront to guide the model's quality output
+    quality_prefix = "photorealistic, ultra-detailed, sharp focus, 8K, rendered with Unreal Engine,"
+    
+    new_prompt = f"{quality_prefix} {base_prompt}, COMPOSITION: {comp_tag}, LIGHTING: {style_tag}. Make it feel like a real image .Focus on the main Product & code idea ."
+    
+    return new_prompt
+
+
+# --- PHASE 3 GENERATION FUNCTIONS ---
 
 def generate_blog_text(prompt: str) -> str:
     """Generates a blog post using Groq's LLM."""
@@ -229,22 +271,34 @@ def generate_blog_text(prompt: str) -> str:
         print(f"DEBUG: Blog text generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Blog text generation failed: {e}")
 
-def generate_image(prompt: str, image_filename: str = "output_image.png") -> str:
-    """Generates an image using Hugging Face's FLUX.1-schnell model."""
+def generate_image(prompt: str, image_filename: str = "output_image.png", seed: Optional[int] = None) -> str:
+    """
+    Generates an image using Hugging Face's FLUX.1-schnell model.
+    Includes random seed in the payload.
+    """
     if not HF_TOKEN:
         raise HTTPException(status_code=500, detail="Hugging Face token not available for image generation.")
 
     API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": prompt}
+    
+    # --- ADD GENERATION PARAMETERS WITH SEED ---
+    generation_parameters = {}
+    if seed is not None:
+        # Note: The exact key for seed depends on the specific HF model endpoint (TGI vs. standard)
+        generation_parameters['seed'] = seed
 
-    print("\n--- DEBUG: GENERATING IMAGE (Hugging Face) ---")
+    payload = {
+        "inputs": prompt,
+        "parameters": generation_parameters
+    }
+
+    print(f"\n--- DEBUG: GENERATING IMAGE: {image_filename} (Hugging Face) ---")
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=90) # Increased timeout
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=90)
         
         if response.status_code == 200:
             file_path = f"generated_content/{image_filename}"
-            # Ensure the directory exists
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, "wb") as f:
                 f.write(response.content)
@@ -259,27 +313,43 @@ def generate_image(prompt: str, image_filename: str = "output_image.png") -> str
         print(f"DEBUG: Image generation failed: {e}")
         raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
 
-# (We'll skip video generation for now as it's not requested, but the structure would be similar)
-# def generate_video_script(prompt: str) -> str:
-#    # ... implementation for video script generation ...
-# --- 4. FASTAPI ENDPOINT & PIPELINE (Remains the same) ---
+
+# --- 4. FASTAPI ENDPOINT & PIPELINE ---
 
 app = FastAPI(title="AI Content Agent Backend")
 
 from fastapi.middleware.cors import CORSMiddleware
-origins = ["http://localhost:8501"] 
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+# Create generated_content directory if it doesn't exist
+os.makedirs("generated_content", exist_ok=True)
+
+# Allow all origins for HTML file access
+origins = [
+    "http://localhost:8501",
+    "http://localhost:3000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "null"  # For file:// protocol
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # Allow all origins for development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Serve static files (for images) - MUST be after CORS middleware
+app.mount("/generated_content", StaticFiles(directory="generated_content"), name="generated_content")
+
+
 @app.post("/submit-content-brief")
 async def submit_content_brief(request: ContentRequest):
-    if not all([groq_client, gemini_client, tavily_client, HF_TOKEN]): # Check HF_TOKEN here too
-         raise HTTPException(status_code=500, detail="API clients or HF_TOKEN failed to initialize. Check environment variables.")
+    if not all([groq_client, gemini_client, tavily_client, HF_TOKEN]):
+        raise HTTPException(status_code=500, detail="API clients or HF_TOKEN failed to initialize. Check environment variables.")
 
     print(f"\n--- PHASE 1 COMPLETE: Starting Research for {request.topic_idea} ---")
     
@@ -289,20 +359,42 @@ async def submit_content_brief(request: ContentRequest):
     
     # --- NEW: PHASE 3: Parallel Generation ---
     generated_blog_content = None
-    generated_image_path = None
-    # generated_video_content = None # Not implementing video for now
+    generated_image_paths = []
+    # generated_video_content = None
 
     if request.primary_format == 'Blog Post':
         generated_blog_content = generate_blog_text(synthesis_result.blog_text_prompt)
-        # For a blog post, you might still want a hero image
-        # generated_image_path = generate_image(synthesis_result.image_prompt, "blog_hero_image.png")
+        
     elif request.primary_format == 'Image':
-        # If primary is image, only generate the image
-        generated_image_path = generate_image(synthesis_result.image_prompt, "primary_content_image.png")
+        # If primary is image, generate the requested number of images
+        num_images = request.item_count or 1
+        for i in range(num_images):
+            # ADD: Create unique timestamp-based filename
+            timestamp = int(time.time() * 1000)  # milliseconds for uniqueness
+            image_filename = f"image_{timestamp}_{i+1}.png"
+            
+            # --- QUALITY & VARIATION SOLUTION ---
+            unique_prompt = vary_image_prompt(synthesis_result.image_prompt, i)
+            print(f"DEBUG: Generating image with unique prompt (Index {i+1}): {unique_prompt[:100]}...")
+            
+            # Use random seed for additional variation
+            random_seed = random.randint(1, 10000000) 
+            generated_image_paths.append(generate_image(
+                unique_prompt, 
+                image_filename,
+                seed=random_seed 
+            ))
+            
+            # ADD: Small delay to ensure different timestamps if generating multiple images
+            time.sleep(0.01)
+            
     elif request.primary_format == 'Video':
-        # If primary is video, generate the video script, and maybe a thumbnail image
-        # generated_video_content = generate_video_script(synthesis_result.video_prompt)
-        generated_image_path = generate_image(synthesis_result.image_prompt, "video_thumbnail.png") # Generate an image for the video thumbnail
+    # Generate thumbnail image for the video
+        timestamp = int(time.time() * 1000)
+        generated_image_paths.append(generate_image(
+            synthesis_result.image_prompt, 
+            f"video_thumbnail_{timestamp}.png"
+        ))
 
     final_blueprint = {
         "status": "success",
@@ -312,8 +404,8 @@ async def submit_content_brief(request: ContentRequest):
         "creative_blueprint": synthesis_result.model_dump(),
         "generated_content": {
             "blog_post": generated_blog_content,
-            "image_file_path": generated_image_path,
-            # "video_script": generated_video_content # For future video integration
+            "image_file_paths": generated_image_paths,
+            # "video_script": generated_video_content
         }
     }
 

@@ -56,13 +56,17 @@ if not st.session_state.phase_complete:
             primary_format = 'Blog Post'
             
         elif content_type == 'Image':
+            primary_format = 'Image'
             item_count = st.slider(
-                "🖼️ Number of Images",
+                "🖼️ Number of Images to Generate",
                 min_value=1,
                 max_value=3,
-                value=1
+                value=1,
+                step=1,
+                help="Select how many variations of images you want to generate"
             )
-            primary_format = 'Image'
+            st.success(f"✨ Will generate **{item_count}** image{'s' if item_count > 1 else ''} based on your topic")
+            st.caption(f"💡 Tip: Select {item_count} {'image' if item_count == 1 else 'images'} will take approximately {item_count * 30} seconds to generate")
             
         elif content_type == 'Video':
             video_duration_seconds = st.slider(
@@ -88,8 +92,10 @@ if not st.session_state.phase_complete:
                 "🖼️ Number of Images",
                 min_value=1,
                 max_value=3,
-                value=2
+                value=2,
+                help="Select how many variations of images you want for the campaign"
             )
+            st.info(f"✨ Will generate **{item_count}** image{'s' if item_count > 1 else ''}")
             video_duration_seconds = st.slider(
                 "⏱️ Video Duration (seconds)",
                 min_value=5,
@@ -157,9 +163,9 @@ if not st.session_state.phase_complete:
             payload["video_duration_seconds"] = video_duration_seconds
         
         # Make API call
-        with st.spinner("🔄 Generating your content... This may take up to 60 seconds."):
+        with st.spinner(f"🔄 Generating your content... This may take up to {60 + (item_count or 1) * 30} seconds."):
             try:
-                response = requests.post(SUBMIT_ENDPOINT, json=payload, timeout=90)
+                response = requests.post(SUBMIT_ENDPOINT, json=payload, timeout=150)
                 
                 if response.status_code == 200:
                     st.session_state.blueprint = response.json()
@@ -189,18 +195,35 @@ if st.session_state.phase_complete and st.session_state.blueprint:
     
     st.header("✨ Generated Content")
     
-    # Display Image
-    if generated_content.get('image_file_path'):
-        image_path = generated_content['image_file_path']
-        if os.path.exists(image_path):
+    # Display Multiple Images
+    if generated_content.get('image_file_paths'):
+        image_paths = generated_content['image_file_paths']
+        
+        if len(image_paths) == 1:
             st.subheader("🖼️ Generated Image")
-            try:
-                img = Image.open(image_path)
-                st.image(img, use_column_width=True)
-            except Exception as e:
-                st.error(f"Could not load image: {e}")
+            image_path = image_paths[0]
+            if os.path.exists(image_path):
+                try:
+                    img = Image.open(image_path)
+                    st.image(img, use_container_width=True)
+                except Exception as e:
+                    st.error(f"Could not load image: {e}")
+            else:
+                st.warning(f"Image file not found: {image_path}")
         else:
-            st.warning(f"Image file not found: {image_path}")
+            st.subheader(f"🖼️ Generated Images ({len(image_paths)} variations)")
+            # Create columns for multiple images
+            cols = st.columns(min(len(image_paths), 3))
+            for idx, image_path in enumerate(image_paths):
+                with cols[idx % 3]:
+                    if os.path.exists(image_path):
+                        try:
+                            img = Image.open(image_path)
+                            st.image(img, caption=f"Image {idx + 1}", use_container_width=True)
+                        except Exception as e:
+                            st.error(f"Could not load image {idx + 1}: {e}")
+                    else:
+                        st.warning(f"Image {idx + 1} not found")
     
     # Display Blog Post
     if generated_content.get('blog_post'):

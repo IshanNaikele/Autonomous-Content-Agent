@@ -6,3 +6,5 @@ requests
 python-dotenv
 streamlit
 huggingface_hub
+elevenlabs
+moviepy
