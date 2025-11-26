@@ -9,7 +9,7 @@ API_KEY =  os.getenv("ELEVENLABS_API_KEY")
 client = ElevenLabs(api_key=API_KEY)
 
 text = """
-n today's fast-moving digital world, attention is the most valuable currency. 
+In today's fast-moving digital world, attention is the most valuable currency. 
 Every idea, every message, and every story is competing to be heard. 
 But the people who win are the ones who express their ideas clearly, confidently, and creatively. 
 That is why content creation has become a real superpower. 

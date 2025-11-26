@@ -14,7 +14,7 @@ from groq import Groq
 from google import genai
 from tavily import TavilyClient
 from google.genai import types 
-
+from .video_generator import create_video_from_text
 # --- 1. Pydantic Schemas for Input and Output ---
 
 class ContentRequest(BaseModel):
@@ -141,13 +141,34 @@ Search snippets:
     )
 
 
+# Add this helper function after the vary_image_prompt function
+
+def calculate_word_count_for_duration(seconds: int) -> int:
+    """
+    Calculate approximate word count for speech duration.
+    Average speaking pace: 150 words per minute (2.5 words per second)
+    For natural, clear speech: 130-140 WPM (2.2-2.3 words per second)
+    """
+    words_per_second = 2.3  # Comfortable speaking pace
+    return int(seconds * words_per_second)
+
+
+# Replace the strategic_synthesis_and_blueprint function with this updated version
+
 def strategic_synthesis_and_blueprint(request: ContentRequest, research_data: ResearchData) -> CreativeBlueprint:
     """Step 2.3: Uses Groq/Gemini for rapid synthesis and structured blueprint generation, outputting final prompts."""
     
-    if not groq_client: # Using Groq for the main synthesis, but falling back to Gemini if needed/or configured to
+    if not groq_client:
         raise HTTPException(status_code=500, detail="Groq client not initialized.")
     
     print("\n--- DEBUG: STEP 2.3 STARTING (Synthesis) ---")
+
+    # Calculate word count for video duration
+    video_word_count = None
+    video_duration_info = ""
+    if request.video_duration_seconds:
+        video_word_count = calculate_word_count_for_duration(request.video_duration_seconds)
+        video_duration_info = f"\nVideo Duration: {request.video_duration_seconds} seconds (Target: {video_word_count} words for natural speech)"
 
     synthesis_prompt = f"""
 You are an elite Creative Strategist at a world-class AI Content Studio. Your mission is to transform the strategic intelligence provided below into a Unified Creative Blueprint. The output must be a single JSON object that contains three fields named blog_text_prompt, image_prompt, and video_prompt. Each field must contain plain English text only. Do not use backticks, markdown formatting, headings, bullets, numbered lists, or nested JSON. The text inside each field must be a single continuous paragraph. Do not escape quotes or newlines - write normal text. The content inside each field must be self-contained so that another agent, receiving that field alone, can generate exceptional output.
@@ -159,13 +180,37 @@ Brand Tone: {request.brand_tone}
 Brand Color: {request.brand_color_hex}
 Business Objective: {request.business_goal}
 Target Keywords: {research_data.target_keywords}
-Format Specification: {request.primary_format}, Length: {request.word_count or request.video_duration_seconds}
+Format Specification: {request.primary_format}, Length: {request.word_count or request.video_duration_seconds}{video_duration_info}
 
 Your Task:
-Create three standalone prompt texts: one for generating a long-form blog article, one for generating a hero image, and one for generating a 30-second vertical video. Write everything as smooth, flowing paragraphs with normal punctuation.
-The prompt for image is like the image should have variation & it shows the actual product very nicely .
+Create three standalone prompt texts: one for generating a long-form blog article, one for generating a hero image, and one for generating video speech script.
+
+CRITICAL REQUIREMENTS FOR video_prompt:
+The video_prompt field must generate a SPEECH SCRIPT ONLY - pure spoken words that will be converted to audio using text-to-speech technology (ElevenLabs). This is NOT a description or instruction, it is the ACTUAL WORDS that will be spoken aloud.
+
+For video_prompt, you must:
+- Generate approximately {video_word_count if video_word_count else '100-150'} words of natural, conversational speech text
+- Write as if you are the narrator speaking directly to the viewer
+- Use short, punchy sentences that sound natural when spoken aloud
+- Include natural pauses (use periods and commas thoughtfully)
+- Avoid complex words or jargon that are hard to pronounce
+- Make it engaging, dynamic, and hook the listener immediately
+- Match the {request.brand_tone} tone perfectly
+- DO NOT include ANY stage directions, descriptions, or meta-instructions
+- DO NOT include phrases like "Say this:" or "The script is:" - just write the pure speech text
+- The text should be slightly under {request.video_duration_seconds if request.video_duration_seconds else 30} seconds when spoken at a natural pace (approximately {video_word_count if video_word_count else '100-150'} words)
+- Generate 10 words lesser if requires but it should not be more .
+- ALso Focus on the Product & the core idea behind it .It's should not be like you are just generating the script that's totally off from the product and not showing anything about the actual product .
+Example of CORRECT video_prompt output:
+"Hey there. Ever wondered why your morning routine feels so chaotic? Here's the truth. You're not broken. Your system is. In the next thirty seconds, I'm going to show you three micro-habits that will transform your entire day. No fluff. No BS. Just results. Ready? Let's dive in."
+
+Example of WRONG video_prompt output:
+"Create a video script about morning routines. The narrator should sound energetic and discuss three habits. Include a hook at the beginning."
+
+The image_prompt should describe a hero image with variation, showing the actual product beautifully with photorealistic quality.The colour ,brand tone should also be focussed.
+
 Return ONLY valid JSON with this exact structure (no code fences, no markdown):
-{{"blog_text_prompt": "your blog prompt text here", "image_prompt": "your image prompt text here", "video_prompt": "your video prompt text here"}}
+{{"blog_text_prompt": "your blog prompt text here", "image_prompt": "your image prompt text here", "video_prompt": "your direct speech script here"}}
 """
     
     try:
@@ -173,12 +218,13 @@ Return ONLY valid JSON with this exact structure (no code fences, no markdown):
             model='gemini-2.5-flash',
             contents=synthesis_prompt,
             config=types.GenerateContentConfig(
-                response_mime_type="application/json"
+                response_mime_type="application/json",
+                temperature=0.8  # Higher temperature for more creative speech
             )
         )
         
         blueprint_text = response.text.strip()
-        print("DEBUG: Raw Blog & image Blueprint Received.")
+        print("DEBUG: Raw Blueprint Received.")
         print(blueprint_text[:500])
         
         # Clean the response
@@ -193,6 +239,16 @@ Return ONLY valid JSON with this exact structure (no code fences, no markdown):
             elif not isinstance(blueprint_data[key], str):
                 blueprint_data[key] = str(blueprint_data[key])
 
+        # Validate video_prompt word count if applicable
+        if request.video_duration_seconds and 'video_prompt' in blueprint_data:
+            actual_word_count = len(blueprint_data['video_prompt'].split())
+            expected_word_count = calculate_word_count_for_duration(request.video_duration_seconds)
+            print(f"DEBUG: Video script word count: {actual_word_count} (target: {expected_word_count})")
+            
+            # Allow 20% variance
+            if actual_word_count > expected_word_count * 1.3:
+                print(f"WARNING: Video script may be too long ({actual_word_count} words for {request.video_duration_seconds}s)")
+
         return CreativeBlueprint(**blueprint_data)
 
     except json.JSONDecodeError as e:
@@ -202,7 +258,6 @@ Return ONLY valid JSON with this exact structure (no code fences, no markdown):
     except Exception as e:
         print(f"DEBUG: Synthesis failed: {e}")
         raise HTTPException(status_code=500, detail={"error": f"Synthesis failed: {e}", "raw_llm_response": blueprint_text if 'blueprint_text' in locals() else "No response"})
-
 
 # --- IMAGE VARIATION HELPER (Optimized for Quality) ---
 
@@ -356,7 +411,8 @@ async def submit_content_brief(request: ContentRequest):
     # --- PHASE 2: Research & Synthesis ---
     research_result = research_and_gap_analysis(request)
     synthesis_result = strategic_synthesis_and_blueprint(request, research_result)
-    
+    print("**"*80)
+    print(synthesis_result)
     # --- NEW: PHASE 3: Parallel Generation ---
     generated_blog_content = None
     generated_image_paths = []
@@ -389,13 +445,42 @@ async def submit_content_brief(request: ContentRequest):
             time.sleep(0.01)
             
     elif request.primary_format == 'Video':
-    # Generate thumbnail image for the video
+        print("\n--- DEBUG: GENERATING VIDEO ---")
         timestamp = int(time.time() * 1000)
+        
+        # Initialize video_path variable
+        video_path = None  # Add this line
+        
+        # Generate thumbnail image for the video
         generated_image_paths.append(generate_image(
             synthesis_result.image_prompt, 
             f"video_thumbnail_{timestamp}.png"
         ))
+        
+        # Generate the actual video
+        try:
+            video_script = synthesis_result.video_prompt
+            video_duration = request.video_duration_seconds or 30
+            
+            print(f"DEBUG: Video script: {video_script[:200]}...")
+            print(f"DEBUG: Video duration: {video_duration} seconds")
+            
+            video_output_filename = f"generated_content/video_{timestamp}.mp4"
+            
+            video_path = create_video_from_text(
+                text=video_script,
+                duration=video_duration,
+                output_video=video_output_filename,
+                seed=random.randint(1, 10000000)
+            )
+            
+            print(f"✅ Video generated successfully: {video_path}")
+            
+        except Exception as e:
+            print(f"❌ Video generation failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Video generation failed: {str(e)}")
 
+    # ✅ MOVE THIS OUTSIDE - it should be at the same indentation level as the if/elif blocks
     final_blueprint = {
         "status": "success",
         "message": "Phase 2 & 3 Complete. Content Generated.",
@@ -405,9 +490,22 @@ async def submit_content_brief(request: ContentRequest):
         "generated_content": {
             "blog_post": generated_blog_content,
             "image_file_paths": generated_image_paths,
-            # "video_script": generated_video_content
+            "video_file_path": video_path if request.primary_format == 'Video' and 'video_path' in locals() else None
         }
     }
 
     print("--- PHASE 2 & 3 COMPLETE ---")
     return final_blueprint
+
+
+@app.get("/video/{filename}")
+async def get_video(filename: str):
+    """Serve generated video files"""
+    video_path = f"generated_content/{filename}"
+    if os.path.exists(video_path):
+        return FileResponse(
+            video_path,
+            media_type="video/mp4",
+            filename=filename
+        )
+    raise HTTPException(status_code=404, detail="Video not found")
