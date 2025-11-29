@@ -16,7 +16,7 @@ from google import genai
 from tavily import TavilyClient
 from google.genai import types 
 from .video_generator import create_video_from_text
-
+ 
 # --- 1. Pydantic Schemas for Input and Output ---
 
 class ContentRequest(BaseModel):
@@ -31,7 +31,18 @@ class ContentRequest(BaseModel):
     business_goal: Literal['Awareness', 'Lead Generation', 'Conversion', 'Engagement'] = Field(..., description="The goal this content must achieve.")
     brand_tone: Literal['Expert & Formal', 'Friendly & Witty', 'Casual & Rebellious'] = Field(..., description="The required tone of voice.")
     brand_color_hex: Optional[str] = Field(None, description="Primary brand color (e.g., #007bff)")
+    # ⭐ NEW OPTIONAL FIELDS FOR SUBTITLES
+    enable_subtitles: bool = Field(default=True, description="Add subtitles to video")
+    subtitle_style: Literal['netflix', 'youtube', 'minimal'] = Field(
+        default='netflix',
+        description="Subtitle visual style"
+    )
 
+    # ⭐ NEW: User tier for logo control
+    user_tier: Literal['free', 'premium'] = Field(
+        default='free',
+        description="User subscription tier. Free users get watermarked videos."
+    )
 
 class ResearchData(BaseModel):
     target_keywords: List[str] = Field(..., description="3-5 inferred high-value keywords.")
@@ -399,7 +410,7 @@ def generate_image(prompt: str, image_filename: str = "output_image.png", seed: 
         "Accept": "image/jpeg",
         "Authorization": f"Bearer {FIREWORKS_API_KEY}",
     }
-    
+    print("The prompt for the audio Scripting :",prompt)
     # 🔥 FIX: Truncate prompt to ~300 characters (FLUX limit is around 77 tokens)
     MAX_PROMPT_LENGTH = 300
     if len(prompt) > MAX_PROMPT_LENGTH:
@@ -540,6 +551,21 @@ async def submit_content_brief(request: ContentRequest):
         generate_image(synthesis_result.image_prompt, video_thumbnail_path)
         print(f"✅ Thumbnail saved: {video_thumbnail_path}")
         
+        # ⭐ NEW: Determine logo settings based on user tier
+        should_add_logo = (request.user_tier == 'free')
+        logo_file_path = "backend/assets/logo.png"
+        
+        # Validate logo exists
+        if should_add_logo and not os.path.exists(logo_file_path):
+            print(f"⚠️  WARNING: Logo requested but file not found at {logo_file_path}")
+            print(f"⚠️  Continuing without logo...")
+            should_add_logo = False
+        
+        if should_add_logo:
+            print(f"🎨 User tier: FREE - Adding logo watermark")
+        else:
+            print(f"⭐ User tier: PREMIUM - No logo watermark")
+        
         try:
             video_script = synthesis_result.video_prompt
             video_duration = request.video_duration_seconds or 30
@@ -554,10 +580,18 @@ async def submit_content_brief(request: ContentRequest):
                 audio_output=audio_filename,
                 frames_folder=frames_folder,
                 thumbnail_path=video_thumbnail_path,
-                seed=random.randint(1, 10000000)
+                seed=random.randint(1, 10000000),
+                add_subtitles=True,
+                subtitle_style="netflix",
+                add_logo=should_add_logo,  # ⭐ NEW
+                logo_path=logo_file_path if should_add_logo else None,  # ⭐ NEW
+                logo_position="bottom-right",  # ⭐ NEW
+                logo_size=150  # ⭐ NEW (you can make this configurable too)
             )
             
             print(f"✅ Video generated successfully: {video_path}")
+            if should_add_logo:
+                print(f"🎨 Logo watermark applied (free tier)")
             
         except Exception as e:
             print(f"❌ Video generation failed: {e}")
@@ -603,6 +637,19 @@ async def submit_content_brief(request: ContentRequest):
         
         generate_image(synthesis_result.image_prompt, video_thumbnail_path)
         
+        # ⭐ NEW: Logo settings for campaign video
+        should_add_logo = (request.user_tier == 'free')
+        logo_file_path = "backend/assets/logo.png"
+        
+        if should_add_logo and not os.path.exists(logo_file_path):
+            print(f"⚠️  WARNING: Logo file not found, continuing without logo")
+            should_add_logo = False
+        
+        if should_add_logo:
+            print(f"🎨 Campaign video: Adding logo (free tier)")
+        else:
+            print(f"⭐ Campaign video: No logo (premium tier)")
+        
         try:
             video_script = synthesis_result.video_prompt
             video_duration = request.video_duration_seconds or 30
@@ -614,10 +661,18 @@ async def submit_content_brief(request: ContentRequest):
                 audio_output=audio_filename,
                 frames_folder=frames_folder,
                 thumbnail_path=video_thumbnail_path,
-                seed=random.randint(1, 10000000)
+                seed=random.randint(1, 10000000),
+                add_subtitles=True,
+                subtitle_style="netflix",
+                add_logo=should_add_logo,  # ⭐ NEW
+                logo_path=logo_file_path if should_add_logo else None,  # ⭐ NEW
+                logo_position="bottom-right",  # ⭐ NEW
+                logo_size=150  # ⭐ NEW
             )
             
             print(f"✅ Campaign generation complete!")
+            if should_add_logo:
+                print(f"🎨 Video includes logo watermark (free tier)")
             
         except Exception as e:
             print(f"❌ Campaign video generation failed: {e}")

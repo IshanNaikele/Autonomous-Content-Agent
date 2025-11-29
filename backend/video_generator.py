@@ -13,7 +13,7 @@ from elevenlabs import ElevenLabs
 from pydub import AudioSegment
 from dotenv import load_dotenv
 from groq import Groq
-
+from .subtitle_generator import add_subtitles_to_video  
 # Load environment variables
 load_dotenv()
 
@@ -162,6 +162,53 @@ def segment_text_by_time(text: str, num_segments: int) -> List[str]:
 # FUNCTION 1: TEXT TO AUDIO
 # ============================================================================
 
+def validate_script_for_duration(text: str, target_duration: int) -> Tuple[bool, str]:
+    """
+    Validates if the script is appropriate for the target duration.
+    
+    Args:
+        text: The script text
+        target_duration: Target duration in seconds
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    word_count = len(text.split())
+    
+    # Average speaking rate: 130-150 words per minute (2.2-2.5 words/second)
+    # For natural speech, aim for 2.3 words/second
+    optimal_words = target_duration * 2.3
+    min_words = target_duration * 1.5  # Minimum (slow speech)
+    max_words = target_duration * 3.5  # Maximum (fast speech)
+    
+    print(f"\n📊 Script Validation:")
+    print(f"   Word count: {word_count}")
+    print(f"   Target duration: {target_duration}s")
+    print(f"   Optimal words: {optimal_words:.0f}")
+    print(f"   Acceptable range: {min_words:.0f} - {max_words:.0f} words")
+    
+    if word_count < min_words:
+        return False, f"Script too short! Need at least {min_words:.0f} words for {target_duration}s, got {word_count}"
+    
+    if word_count > max_words:
+        return False, f"Script too long! Maximum {max_words:.0f} words for {target_duration}s, got {word_count}"
+    
+    # Calculate expected speed adjustment
+    natural_duration = word_count / 2.3
+    speed_ratio = natural_duration / target_duration
+    
+    print(f"   Natural duration: {natural_duration:.1f}s")
+    print(f"   Speed adjustment needed: {speed_ratio:.2f}x")
+    
+    if speed_ratio > 2.0:
+        return False, f"Script would need {speed_ratio:.2f}x speedup (max 2.0x). Reduce word count."
+    
+    if speed_ratio < 0.5:
+        return False, f"Script would need {speed_ratio:.2f}x slowdown (min 0.5x). Add more words."
+    
+    return True, "✅ Script length is appropriate"
+
+
 def generate_audio_from_text(text: str, target_duration: int, output_filename: str = AUDIO_FILE) -> str:
     """
     Converts text to audio using ElevenLabs API.
@@ -182,9 +229,16 @@ def generate_audio_from_text(text: str, target_duration: int, output_filename: s
     if not ELEVENLABS_API_KEY:
         raise Exception("ElevenLabs API key not found in .env file")
     
-    print(f"📝 Text length: {len(text)} characters")
+    is_valid, message = validate_script_for_duration(text, target_duration)
+    print(message)
+    
+    if not is_valid:
+        raise ValueError(f"❌ Script validation failed: {message}")
+    
+    print(f"\n📝 Text length: {len(text)} characters")
+    print(f"📝 Word count: {len(text.split())} words")
     print(f"⏱️  Target duration: {target_duration} seconds")
-    print("🔊 Generating speech...")
+    print("🔊 Generating speech with ElevenLabs...")
     
     try:
         response = elevenlabs_client.text_to_speech.convert(
@@ -277,7 +331,8 @@ REQUIREMENTS:
 5. **Specificity**: Include exact details about subject, action, mood, lighting, camera angle
 6. **Length**: Each prompt should be 20-30 words
 7. **Context**:The prompt you are giving for generating images should show the core product values & the product .It is mandatory that the prompt matches that audio context but also remind you the image prompt sequence should be related from each other should it should not feel like discontinuiation in the video flow .
-8. **Generate**:The prompt should be like it's not creating the same image again & again .
+8. **Generate**:The prompt should be like it's not creating the same image again & again .Create Prompt in such a way that the thing should look real & perfect . Don't Keep Humans as the main object in the prompt more than 3 times ,these is mandatory .
+9. **Relationship** :There should be matching between the audio & the images .It should not feel like irrelevant of the audio .
 FORMAT:
 Return ONLY a JSON array with {num_segments} objects:
 [
@@ -527,10 +582,14 @@ def create_video_with_audio(
     audio_path: str,
     output_filename: str,
     duration_per_image: int,
-    thumbnail_path: Optional[str] = None
+    thumbnail_path: Optional[str] = None,
+    add_logo: bool = False,  # ⭐ NEW
+    logo_path: Optional[str] = None,  # ⭐ NEW
+    logo_position: str = "bottom-right",  # ⭐ NEW
+    logo_size: int = 150  # ⭐ NEW (logo dimensions in pixels)
 ) -> str:
     """
-    Combines images and audio into a video file with embedded thumbnail.
+    Combines images and audio into a video file with embedded thumbnail and optional logo.
     
     Args:
         image_paths: List of image file paths
@@ -538,6 +597,10 @@ def create_video_with_audio(
         output_filename: Name of output video file
         duration_per_image: Duration each image should display (seconds)
         thumbnail_path: Optional path to thumbnail image to embed as video poster
+        add_logo: Whether to add logo overlay (for free users)
+        logo_path: Path to logo PNG file
+        logo_position: Where to place logo ("top-left", "top-right", "bottom-left", "bottom-right", "center")
+        logo_size: Logo dimensions in pixels (default: 150x150)
     
     Returns:
         Path to the generated video file
@@ -562,6 +625,14 @@ def create_video_with_audio(
         print(f"⚠️  No thumbnail provided or file not found")
         thumbnail_path = None
     
+    # ⭐ NEW: Logo validation
+    if add_logo:
+        if logo_path and os.path.exists(logo_path):
+            print(f"🎨 Logo: {logo_path} (position: {logo_position})")
+        else:
+            print(f"⚠️  Logo requested but file not found: {logo_path}")
+            add_logo = False
+    
     # Create concat file for FFmpeg
     concat_file = "ffmpeg_concat.txt"
     with open(concat_file, "w", encoding="utf-8") as f:
@@ -584,51 +655,107 @@ def create_video_with_audio(
     print("\n🎥 Running FFmpeg (this takes 30-60 seconds)...")
     total_duration = len(image_paths) * duration_per_image
     
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", concat_file,
-        "-i", audio_path,
-    ]
-    
-    # Add thumbnail as third input if available
-    if thumbnail_path:
-        cmd.extend(["-i", thumbnail_path])
-    
-    cmd.extend([
-        # Video settings
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-r", "25",
-        "-vsync", "cfr",
+    # ⭐ NEW: Build command based on logo requirement
+    if add_logo and logo_path:
+        # WITH LOGO - More complex command
         
-        # Audio settings
-        "-c:a", "aac",
-        "-b:a", "192k",
-        "-ar", "48000",
-        "-ac", "2",
-        "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
-    ])
-    
-    # Map streams correctly based on whether thumbnail is present
-    if thumbnail_path:
+        # Logo position mapping
+        positions = {
+            "top-left": "10:10",
+            "top-right": "W-w-10:10",
+            "bottom-left": "10:H-h-10",
+            "bottom-right": "W-w-10:H-h-10",
+            "center": "(W-w)/2:(H-h)/2"
+        }
+        overlay_pos = positions.get(logo_position, "W-w-10:H-h-10")
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_file,  # Input 0: video frames
+            "-i", audio_path,   # Input 1: audio
+            "-i", logo_path,    # Input 2: logo
+        ]
+        
+        # Build filter complex for logo overlay with transparency
+        filter_complex = f"[2:v]scale={logo_size}:{logo_size}[logo];[0:v][logo]overlay={overlay_pos}"
+        
         cmd.extend([
-            "-map", "0:v",  # Video from concat (images)
-            "-map", "1:a"  # Audio from audio file
+            "-filter_complex", filter_complex,
+            
+            # Video settings
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-r", "25",
+            
+            # Audio settings
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
+            
+            # Map audio from input 1
+            "-map", "1:a",
+            
+            # Duration
+            "-t", str(total_duration),
+            "-shortest",
+            "-movflags", "+faststart",
+            
+            output_filename
         ])
-        print("✅ Embedding thumbnail as video poster frame")
-    
-    cmd.extend([
-        # Duration
-        "-t", str(total_duration),
-        "-shortest",
-        "-movflags", "+faststart",
         
-        output_filename
-    ])
+    else:
+        # WITHOUT LOGO - Original command
+        
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", concat_file,
+            "-i", audio_path,
+        ]
+        
+        # Add thumbnail as third input if available
+        if thumbnail_path:
+            cmd.extend(["-i", thumbnail_path])
+        
+        cmd.extend([
+            # Video settings
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
+            "-r", "25",
+            "-vsync", "cfr",
+            
+            # Audio settings
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
+        ])
+        
+        # Map streams correctly based on whether thumbnail is present
+        if thumbnail_path:
+            cmd.extend([
+                "-map", "0:v",  # Video from concat (images)
+                "-map", "1:a"   # Audio from audio file
+            ])
+        
+        cmd.extend([
+            # Duration
+            "-t", str(total_duration),
+            "-shortest",
+            "-movflags", "+faststart",
+            
+            output_filename
+        ])
     
     try:
         result = subprocess.run(
@@ -651,6 +778,8 @@ def create_video_with_audio(
             print(f"⏱️  Duration: {total_duration} seconds")
             if thumbnail_path:
                 print(f"🖼️  Thumbnail embedded successfully")
+            if add_logo:
+                print(f"🎨 Logo embedded successfully at {logo_position}")
             return output_filename
         else:
             raise Exception("Video file was not created")
@@ -675,11 +804,17 @@ def create_video_from_text(
     audio_output: str = AUDIO_FILE,
     frames_folder: str = OUTPUT_FOLDER,
     thumbnail_path: Optional[str] = None,
-    seed: Optional[int] = None
+    seed: Optional[int] = None,
+    add_subtitles: bool = True,
+    subtitle_style: str = "netflix",
+    add_logo: bool = False,  # ⭐ NEW
+    logo_path: Optional[str] = None,  # ⭐ NEW
+    logo_position: str = "bottom-right",  # ⭐ NEW
+    logo_size: int = 150  # ⭐ NEW
 ) -> str:
     """
-    Complete pipeline with TIME-BASED SEGMENTATION + THUMBNAIL EMBEDDING:
-    Text → Segmentation → Audio → Time-Synced Prompts → Images → Video with Thumbnail
+    Complete pipeline with TIME-BASED SEGMENTATION + THUMBNAIL EMBEDDING + LOGO OVERLAY:
+    Text → Segmentation → Audio → Time-Synced Prompts → Images → Video with Thumbnail & Logo
     Each image displays for 3 seconds.
     
     Args:
@@ -690,6 +825,12 @@ def create_video_from_text(
         frames_folder: Folder to save frame images
         thumbnail_path: Optional path to thumbnail image to embed
         seed: Optional seed for reproducible image generation
+        add_subtitles: Whether to add subtitles (default: True)
+        subtitle_style: Subtitle style ("netflix", "youtube", "minimal")
+        add_logo: Whether to add logo overlay (for free users)
+        logo_path: Path to logo PNG file
+        logo_position: Logo position ("top-left", "top-right", "bottom-left", "bottom-right", "center")
+        logo_size: Logo dimensions in pixels
     
     Returns:
         Path to the final video file
@@ -722,14 +863,33 @@ def create_video_from_text(
             print(f"\n⚠️  Warning: Only {len(image_paths)}/{num_images} images generated")
             print("Continuing with available images...")
         
-        # Step 4: Create video with thumbnail
+        # Step 4: Create video with thumbnail and logo
         video_path = create_video_with_audio(
             image_paths, 
             audio_path, 
             output_video,
             duration_per_image,
-            thumbnail_path=thumbnail_path
+            thumbnail_path=thumbnail_path,
+            add_logo=add_logo,  # ⭐ NEW
+            logo_path=logo_path,  # ⭐ NEW
+            logo_position=logo_position,  # ⭐ NEW
+            logo_size=logo_size  # ⭐ NEW
         )
+
+        # Step 5: Add subtitles if requested
+        if add_subtitles:
+            print("\n" + "=" * 70)
+            print("📝 ADDING SUBTITLES")
+            print("=" * 70)
+            
+            subtitled_video = add_subtitles_to_video(
+                video_path=video_path,
+                script_text=text,
+                duration=len(image_paths) * duration_per_image,
+                style=subtitle_style
+            )
+            
+            video_path = subtitled_video    
         
         print("\n" + "=" * 70)
         print("🎉 TIME-SYNCED PIPELINE COMPLETED!")
@@ -738,6 +898,10 @@ def create_video_from_text(
         print(f"⏱️  Duration: {len(image_paths) * duration_per_image} seconds ({len(image_paths)} images at 3s each)")
         if thumbnail_path:
             print(f"🖼️  Thumbnail embedded from: {thumbnail_path}")
+        if add_logo:
+            print(f"🎨 Logo embedded at {logo_position}")
+        if add_subtitles:
+            print(f"📝 Subtitles added ({subtitle_style} style)")
         print(f"\n✨ Each image perfectly matches what's being said at that moment!")
         print(f"\n💡 To play: start {video_path}")
         print("=" * 70)
