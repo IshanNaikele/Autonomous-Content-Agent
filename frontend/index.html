@@ -20,6 +20,9 @@
         
         <input type="radio" id="video" name="contentType" value="Video">
         <label for="video">Video</label>
+        
+        <input type="radio" id="campaign" name="contentType" value="Campaign">
+        <label for="campaign">Full Campaign (All)</label>
         <br><br>
 
         <div id="dynamicSpecs" style="display:none;">
@@ -44,6 +47,23 @@
                 <input type="radio" name="videoDuration" value="30" checked> 30s
                 <input type="radio" name="videoDuration" value="45"> 45s
                 <input type="radio" name="videoDuration" value="60"> 60s
+                <br><br>
+            </div>
+            
+            <div id="campaignSpecs" style="display:none;">
+                <p><strong>Campaign will generate:</strong></p>
+                <label>Blog Word Count:</label>
+                <input type="number" id="campaignWordCount" value="1500" min="100" max="5000">
+                <br><br>
+                <label>Number of Images:</label>
+                <input type="range" id="campaignImageCount" min="1" max="3" value="2">
+                <span id="campaignImageCountValue">2</span>
+                <br><br>
+                <label>Video Duration:</label><br>
+                <input type="radio" name="campaignVideoDuration" value="15"> 15s
+                <input type="radio" name="campaignVideoDuration" value="30" checked> 30s
+                <input type="radio" name="campaignVideoDuration" value="45"> 45s
+                <input type="radio" name="campaignVideoDuration" value="60"> 60s
                 <br><br>
             </div>
         </div>
@@ -113,6 +133,7 @@
             document.getElementById('blogSpecs').style.display = 'none';
             document.getElementById('imageSpecs').style.display = 'none';
             document.getElementById('videoSpecs').style.display = 'none';
+            document.getElementById('campaignSpecs').style.display = 'none';
             
             dynamicSpecs.style.display = 'block';
             
@@ -122,12 +143,18 @@
                 document.getElementById('imageSpecs').style.display = 'block';
             } else if (contentType === 'Video') {
                 document.getElementById('videoSpecs').style.display = 'block';
+            } else if (contentType === 'Campaign') {
+                document.getElementById('campaignSpecs').style.display = 'block';
             }
         }
 
         // Image count slider
         document.getElementById('imageCount').addEventListener('input', function() {
             document.getElementById('imageCountValue').textContent = this.value;
+        });
+        
+        document.getElementById('campaignImageCount').addEventListener('input', function() {
+            document.getElementById('campaignImageCountValue').textContent = this.value;
         });
 
         // Initialize
@@ -170,6 +197,14 @@
                 payload.item_count = 1;
                 estimatedTime = 120 + (payload.video_duration_seconds * 2);
                 document.getElementById('loadingDetails').textContent = 'Generating ' + payload.video_duration_seconds + 's video...';
+            } else if (contentType === 'Campaign') {
+                payload.primary_format = 'Campaign';
+                payload.word_count = parseInt(document.getElementById('campaignWordCount').value);
+                payload.item_count = parseInt(document.getElementById('campaignImageCount').value);
+                const selectedDuration = document.querySelector('input[name="campaignVideoDuration"]:checked');
+                payload.video_duration_seconds = parseInt(selectedDuration.value);
+                estimatedTime = 180 + (payload.item_count * 30) + (payload.video_duration_seconds * 2);
+                document.getElementById('loadingDetails').textContent = 'Generating full campaign (blog + ' + payload.item_count + ' images + video)...';
             }
 
             document.getElementById('estimatedTime').textContent = estimatedTime;
@@ -231,14 +266,28 @@
             
             // Display video
             if (generatedContent.video_file_path) {
-                const videoPath = generatedContent.video_file_path;
-                const videoUrl = FASTAPI_URL + '/' + videoPath;
-                
-                document.getElementById('videoResults').innerHTML = 
-                    '<h3>Generated Video</h3>' +
-                    '<video controls width="800"><source src="' + videoUrl + '" type="video/mp4"></video>' +
-                    '<br><a href="' + videoUrl + '" download>Download Video</a><br><br>';
-            }
+    const videoPath = generatedContent.video_file_path;
+    const videoUrl = FASTAPI_URL + '/' + videoPath;
+    
+    // Check if thumbnail exists
+    let videoHTML = '<h3>Generated Video</h3>';
+    
+    if (generatedContent.video_thumbnail_path) {
+        const thumbnailPath = generatedContent.video_thumbnail_path;
+        const thumbnailUrl = FASTAPI_URL + '/' + thumbnailPath;
+        
+        // Video with poster thumbnail
+        videoHTML += '<video controls width="800" poster="' + thumbnailUrl + '">' +
+                    '<source src="' + videoUrl + '" type="video/mp4"></video>';
+    } else {
+        // Video without poster
+        videoHTML += '<video controls width="800"><source src="' + videoUrl + '" type="video/mp4"></video>';
+    }
+    
+    videoHTML += '<br><a href="' + videoUrl + '" download>Download Video</a><br><br>';
+    
+    document.getElementById('videoResults').innerHTML = videoHTML;
+}
             
             // Display images
             if (generatedContent.image_file_paths && generatedContent.image_file_paths.length > 0) {
@@ -248,7 +297,8 @@
                 imagePaths.forEach((path, index) => {
                     const imageUrl = FASTAPI_URL + '/' + path;
                     imageHTML += '<div><p>Image ' + (index + 1) + '</p>' +
-                                '<img src="' + imageUrl + '" width="400" alt="Image ' + (index + 1) + '"><br><br></div>';
+                                '<img src="' + imageUrl + '" width="400" alt="Image ' + (index + 1) + '"><br>' +
+                                '<a href="' + imageUrl + '" download>Download Image ' + (index + 1) + '</a><br><br></div>';
                 });
                 
                 document.getElementById('imageResults').innerHTML = imageHTML;

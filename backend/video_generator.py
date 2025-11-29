@@ -1,6 +1,6 @@
 """
-Complete Video Generator Module with Time-Based Segmentation
-Converts text → audio → time-synced image prompts → video with audio
+Complete Video Generator Module with Time-Based Segmentation + Thumbnail Embedding
+Converts text → audio → time-synced image prompts → video with audio + thumbnail
 Each image displays for 3 seconds
 """
 
@@ -33,16 +33,17 @@ VIDEO_OUTPUT = "final_video.mp4"
 
 # Duration mapping: video_duration → (num_images, duration_per_image)
 DURATION_CONFIG = {
-    5: (2, 3),      # 2 images × 3s = 6s (adjusted to fit)
-    10: (4, 3),     # 4 images × 3s = 12s (adjusted to fit)
-    15: (5, 3),     # 5 images × 3s = 15s
-    30: (10, 3),    # 10 images × 3s = 30s
-    45: (15, 3),    # 15 images × 3s = 45s
-    60: (20, 3),    # 20 images × 3s = 60s
+    5: (2, 3),
+    10: (4, 3),
+    15: (5, 3),
+    30: (10, 3),
+    45: (15, 3),
+    60: (20, 3),
 }
 
-# Ensure output folder exists
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs("generated_content/images", exist_ok=True)
+os.makedirs("generated_content/videos", exist_ok=True)
+os.makedirs("generated_content/blogs", exist_ok=True)
 
 
 # ============================================================================
@@ -147,7 +148,7 @@ def segment_text_by_time(text: str, num_segments: int) -> List[str]:
         segments[shortest_idx] = segments[shortest_idx] + ' ' + segments[shortest_idx + 1]
         segments.pop(shortest_idx + 1)
     
-    # Display segments
+    # Display segments  
     print(f"\n✅ Created {len(segments)} time-based segments:\n")
     for i, seg in enumerate(segments, 1):
         duration_start = (i - 1) * 3
@@ -187,7 +188,7 @@ def generate_audio_from_text(text: str, target_duration: int, output_filename: s
     
     try:
         response = elevenlabs_client.text_to_speech.convert(
-            voice_id="2EiwWnXFnvU5JabPnv8n",
+            voice_id="T3b0vsQ5dQwMZ5ckOwBk",
             model_id="eleven_flash_v2_5",
             text=text,
             output_format="mp3_44100_128"
@@ -263,7 +264,7 @@ def generate_time_synced_prompts(text_segments: List[str]) -> List[str]:
     
     llm_prompt = f"""You are an elite AI Visual Director. You will receive {num_segments} text segments from a video narration. Each segment represents exactly 3 seconds of spoken content.
 
-Your task: Create a STUNNING, CINEMATIC image prompt for each segment that PERFECTLY MATCHES what is being narrated during those 3 seconds.
+Your task: Create a STUNNING, CINEMATIC image prompt for each segment that PERFECTLY MATCHES what is being narrated during those 3 seconds.The image should be realistic and feels like a real .It should not be seem like an AI generated .
 
 NARRATION SEGMENTS:
 {segments_text}
@@ -274,8 +275,9 @@ REQUIREMENTS:
 3. **Visual Diversity**: Each prompt should have different camera angles, lighting, and composition
 4. **Consistency**: Maintain a cohesive visual style across all {num_segments} images
 5. **Specificity**: Include exact details about subject, action, mood, lighting, camera angle
-6. **Length**: Each prompt should be 50-80 words
-
+6. **Length**: Each prompt should be 20-30 words
+7. **Context**:The prompt you are giving for generating images should show the core product values & the product .It is mandatory that the prompt matches that audio context but also remind you the image prompt sequence should be related from each other should it should not feel like discontinuiation in the video flow .
+8. **Generate**:The prompt should be like it's not creating the same image again & again .
 FORMAT:
 Return ONLY a JSON array with {num_segments} objects:
 [
@@ -403,84 +405,106 @@ def generate_fallback_prompts(text_segments: List[str]) -> List[str]:
 
 
 def vary_image_prompt(base_prompt: str, index: int) -> str:
-    """Creates variations of prompts with different styles"""
+    """
+    Creates distinct, high-quality prompts by appending specific camera angles 
+    and lighting styles while prioritizing the original brand/color details.
+    """
+    
     composition_variations = [
-        "shot from a low angle, dramatic wide-angle cinematic framing",
-        "extreme close-up, shallow depth of field, bokeh background",
-        "overhead bird's eye view, minimalist composition",
-        "medium shot, rule of thirds, leading lines",
-        "high-angle perspective, environmental context",
-        "isometric 3D perspective, clean interface",
+        "low angle shot, wide cinematic framing",
+        "extreme close-up, shallow depth of field",
+        "overhead flat lay, minimalist background",
+        "medium shot, rule of thirds",
+        "high-angle perspective",
+        "isometric 3D render view",
     ]
     
     style_variations = [
-        "illuminated by dramatic rim lighting and deep shadows",
-        "soft diffused daylight, warm pastel colors",
-        "vibrant neon glow, futuristic aesthetic",
-        "golden hour sunlight, cinematic warm tones",
-        "moody chiaroscuro lighting, rich textures",
-        "bright high-key studio photography, professional",
+        "dramatic rim lighting, rich contrast",
+        "soft daylight, warm pastels",
+        "vibrant neon glow, futuristic",
+        "golden hour sunlight, cinematic",
+        "moody chiaroscuro lighting",
+        "bright studio photography",
     ]
     
-    comp = composition_variations[index % len(composition_variations)]
-    style = style_variations[index % len(style_variations)]
+    comp_tag = composition_variations[index % len(composition_variations)]
+    style_tag = style_variations[index % len(style_variations)]
     
-    return f"Photorealistic, ultra-detailed, 8K, {base_prompt}, {comp}, {style}, award-winning quality"
-
+    # ⭐ FIX: Remove aggressive truncation, but ensure a clean start/end
+    # We will let the LLM handle the core content, trusting it was specific.
+    base_prompt = base_prompt.strip().rstrip(',').rstrip('.')
+    
+    # ⭐ FIX: Move quality and style modifiers to the END to prioritize brand/color
+    # The image model reads best when specifics (color, subject) are first.
+    # Quality prefix is kept short for character count management.
+    quality_suffix = "photorealistic, 8K, ultra-detailed, cinematic" 
+    
+    # ⭐ CONSTRUCT THE NEW PROMPT: Original content first, then stylistic variations.
+    new_prompt = f"{base_prompt}, {comp_tag}, {style_tag}, {quality_suffix}"
+    
+    # 🔥 FINAL CHECK: ENSURE prompt is under the recommended 300 chars
+    if len(new_prompt) > 300:
+        # Truncate aggressively but keep the core idea at the start
+        new_prompt = new_prompt[:300].rsplit(',', 1)[0]
+    
+    return new_prompt
 
 # ============================================================================
 # FUNCTION 3: GENERATE IMAGES
 # ============================================================================
 
-def generate_images(prompts: List[str], seed: Optional[int] = None) -> List[str]:
+def generate_images(prompts: List[str], seed: Optional[int] = None, output_folder: str = OUTPUT_FOLDER) -> List[str]:
     """
-    Generates images using Hugging Face FLUX model.
-    
-    Args:
-        prompts: List of image generation prompts
-        seed: Optional seed for reproducibility
-    
-    Returns:
-        List of generated image file paths
+    Generates images using Fireworks AI FLUX model.
     """
     print("\n" + "=" * 70)
-    print("🎨 STEP 3: GENERATING IMAGES")
+    print("🎨 STEP 3: GENERATING IMAGES (Fireworks AI)")
     print("=" * 70)
     
-    if not HF_TOKEN:
-        raise Exception("Hugging Face token not found in .env file")
+    FIREWORKS_API_KEY = os.getenv("FIREWORKS_API_KEY")
+    if not FIREWORKS_API_KEY:
+        raise Exception("Fireworks API key not found in .env file")
     
-    API_URL = "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    API_URL = "https://api.fireworks.ai/inference/v1/workflows/accounts/fireworks/models/flux-1-schnell-fp8/text_to_image"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "image/jpeg",
+        "Authorization": f"Bearer {FIREWORKS_API_KEY}",
+    }
     
     generated_images = []
+    MAX_PROMPT_LENGTH = 300  # 🔥 ADD THIS
     
     for i, prompt in enumerate(prompts, 1):
         print(f"\n[{i}/{len(prompts)}] Generating image for seconds {(i-1)*3}-{i*3}...")
-        print(f"📝 Full Prompt: {prompt}")
-        print("🎨 Generating...")
         
-        # Prepare payload
-        generation_parameters = {}
+        # 🔥 ADD THIS: Truncate prompt
+        if len(prompt) > MAX_PROMPT_LENGTH:
+            print(f"⚠️  Prompt too long ({len(prompt)} chars), truncating to {MAX_PROMPT_LENGTH}")
+            prompt = prompt[:MAX_PROMPT_LENGTH].rsplit(' ', 1)[0]
+        
+        print(f"📝 Prompt ({len(prompt)} chars): {prompt[:80]}...")
+        print("🔥 Generating with Fireworks...")
+        
+        payload = {"prompt": prompt}
         if seed is not None:
-            generation_parameters['seed'] = seed + i
-        
-        payload = {
-            "inputs": prompt,
-            "parameters": generation_parameters
-        }
+            payload["seed"] = seed + i
         
         try:
-            response = requests.post(API_URL, headers=headers, json=payload, timeout=90)
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
             
             if response.status_code == 200:
-                filename = f"image_{i:02d}.png"
-                file_path = os.path.join(OUTPUT_FOLDER, filename)
+                os.makedirs(output_folder, exist_ok=True)
+                
+                filename = f"image_{i:02d}.jpg"
+                file_path = os.path.join(output_folder, filename)
                 
                 with open(file_path, "wb") as f:
                     f.write(response.content)
                 
-                print(f"✅ Saved: {filename}")
+                file_size = len(response.content) / 1024
+                print(f"✅ Saved: {filename} ({file_size:.1f} KB)")
                 generated_images.append(file_path)
             else:
                 print(f"⚠️  Failed: {response.status_code} - {response.text}")
@@ -495,29 +519,31 @@ def generate_images(prompts: List[str], seed: Optional[int] = None) -> List[str]
 
 
 # ============================================================================
-# FUNCTION 4: STITCH IMAGES WITH AUDIO
+# FUNCTION 4: STITCH IMAGES WITH AUDIO + THUMBNAIL EMBEDDING
 # ============================================================================
 
 def create_video_with_audio(
     image_paths: List[str],
     audio_path: str,
     output_filename: str,
-    duration_per_image: int
+    duration_per_image: int,
+    thumbnail_path: Optional[str] = None
 ) -> str:
     """
-    Combines images and audio into a video file.
+    Combines images and audio into a video file with embedded thumbnail.
     
     Args:
         image_paths: List of image file paths
         audio_path: Path to audio file
         output_filename: Name of output video file
         duration_per_image: Duration each image should display (seconds)
+        thumbnail_path: Optional path to thumbnail image to embed as video poster
     
     Returns:
         Path to the generated video file
     """
     print("\n" + "=" * 70)
-    print("🎬 STEP 4: CREATING VIDEO WITH AUDIO")
+    print("🎬 STEP 4: CREATING VIDEO WITH AUDIO & THUMBNAIL")
     print("=" * 70)
     
     if len(image_paths) == 0:
@@ -529,6 +555,12 @@ def create_video_with_audio(
     print(f"📸 Images: {len(image_paths)}")
     print(f"🎵 Audio: {audio_path}")
     print(f"⏱️  Duration per image: {duration_per_image}s")
+    
+    if thumbnail_path and os.path.exists(thumbnail_path):
+        print(f"🖼️  Thumbnail: {thumbnail_path}")
+    else:
+        print(f"⚠️  No thumbnail provided or file not found")
+        thumbnail_path = None
     
     # Create concat file for FFmpeg
     concat_file = "ffmpeg_concat.txt"
@@ -548,7 +580,7 @@ def create_video_with_audio(
     if os.path.exists(output_filename):
         os.remove(output_filename)
     
-    # FFmpeg command
+    # Build FFmpeg command
     print("\n🎥 Running FFmpeg (this takes 30-60 seconds)...")
     total_duration = len(image_paths) * duration_per_image
     
@@ -558,7 +590,13 @@ def create_video_with_audio(
         "-safe", "0",
         "-i", concat_file,
         "-i", audio_path,
-        
+    ]
+    
+    # Add thumbnail as third input if available
+    if thumbnail_path:
+        cmd.extend(["-i", thumbnail_path])
+    
+    cmd.extend([
         # Video settings
         "-c:v", "libx264",
         "-preset", "medium",
@@ -573,14 +611,24 @@ def create_video_with_audio(
         "-ar", "48000",
         "-ac", "2",
         "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
-        
+    ])
+    
+    # Map streams correctly based on whether thumbnail is present
+    if thumbnail_path:
+        cmd.extend([
+            "-map", "0:v",  # Video from concat (images)
+            "-map", "1:a"  # Audio from audio file
+        ])
+        print("✅ Embedding thumbnail as video poster frame")
+    
+    cmd.extend([
         # Duration
         "-t", str(total_duration),
         "-shortest",
         "-movflags", "+faststart",
         
         output_filename
-    ]
+    ])
     
     try:
         result = subprocess.run(
@@ -601,6 +649,8 @@ def create_video_with_audio(
             print(f"📁 File: {os.path.abspath(output_filename)}")
             print(f"📦 Size: {file_size:.2f} MB")
             print(f"⏱️  Duration: {total_duration} seconds")
+            if thumbnail_path:
+                print(f"🖼️  Thumbnail embedded successfully")
             return output_filename
         else:
             raise Exception("Video file was not created")
@@ -622,17 +672,23 @@ def create_video_from_text(
     text: str,
     duration: int = 60,
     output_video: str = VIDEO_OUTPUT,
+    audio_output: str = AUDIO_FILE,
+    frames_folder: str = OUTPUT_FOLDER,
+    thumbnail_path: Optional[str] = None,
     seed: Optional[int] = None
 ) -> str:
     """
-    Complete pipeline with TIME-BASED SEGMENTATION:
-    Text → Segmentation → Audio → Time-Synced Prompts → Images → Video
+    Complete pipeline with TIME-BASED SEGMENTATION + THUMBNAIL EMBEDDING:
+    Text → Segmentation → Audio → Time-Synced Prompts → Images → Video with Thumbnail
     Each image displays for 3 seconds.
     
     Args:
         text: The script text for the video
         duration: Video duration in seconds (5, 10, 15, 30, 45, 60, or custom)
         output_video: Output video filename
+        audio_output: Output audio filename
+        frames_folder: Folder to save frame images
+        thumbnail_path: Optional path to thumbnail image to embed
         seed: Optional seed for reproducible image generation
     
     Returns:
@@ -653,25 +709,26 @@ def create_video_from_text(
         # Step 0: Segment text by time FIRST
         text_segments = segment_text_by_time(text, num_images)
         
-        # Step 1: Generate audio (full text)
-        audio_path = generate_audio_from_text(text, duration)
+        # Step 1: Generate audio (full text) in video folder
+        audio_path = generate_audio_from_text(text, duration, audio_output)
         
         # Step 2: Generate time-synced image prompts
         prompts = generate_time_synced_prompts(text_segments)
         
-        # Step 3: Generate images
-        image_paths = generate_images(prompts, seed)
+        # Step 3: Generate images in frames folder
+        image_paths = generate_images(prompts, seed, frames_folder)
         
         if len(image_paths) < num_images:
             print(f"\n⚠️  Warning: Only {len(image_paths)}/{num_images} images generated")
             print("Continuing with available images...")
         
-        # Step 4: Create video
+        # Step 4: Create video with thumbnail
         video_path = create_video_with_audio(
             image_paths, 
             audio_path, 
             output_video,
-            duration_per_image
+            duration_per_image,
+            thumbnail_path=thumbnail_path
         )
         
         print("\n" + "=" * 70)
@@ -679,6 +736,8 @@ def create_video_from_text(
         print("=" * 70)
         print(f"📁 Final video: {os.path.abspath(video_path)}")
         print(f"⏱️  Duration: {len(image_paths) * duration_per_image} seconds ({len(image_paths)} images at 3s each)")
+        if thumbnail_path:
+            print(f"🖼️  Thumbnail embedded from: {thumbnail_path}")
         print(f"\n✨ Each image perfectly matches what's being said at that moment!")
         print(f"\n💡 To play: start {video_path}")
         print("=" * 70)
@@ -699,8 +758,6 @@ if __name__ == "__main__":
     sample_text = """
     In today's competitive landscape, the real advantage lies in a mind that keeps learning, improving, and delivering results.
 Every challenge, every project, and every goal needs someone who thinks ahead, adapts quickly, and brings clarity to complexity.
- 
- 
     """
     
     print("🎬 TIME-SYNCED AI VIDEO GENERATOR - DEMO")
@@ -715,7 +772,7 @@ Every challenge, every project, and every goal needs someone who thinks ahead, a
     print("  • 60 seconds → 20 images\n")
     
     # You can change duration here
-    VIDEO_DURATION = 10  # Change to 5, 10, 15, 30, 45, 60, or any custom duration
+    VIDEO_DURATION = 10
     
     try:
         video_path = create_video_from_text(

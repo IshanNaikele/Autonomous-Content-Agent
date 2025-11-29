@@ -57,37 +57,85 @@ print("⏳ Please wait...\n")
 # Remove old output
 if os.path.exists(OUTPUT_VIDEO):
     os.remove(OUTPUT_VIDEO)
-
+ 
 # FFmpeg command with vsync cfr for consistent frame timing
-cmd = [
-    "ffmpeg", "-y",
-    "-f", "concat",
-    "-safe", "0",
-    "-i", concat_file,
-    "-i", AUDIO_INPUT,
-    
-    # Video settings
-    "-c:v", "libx264",
-    "-preset", "medium",
-    "-crf", "23",
-    "-pix_fmt", "yuv420p",
-    "-r", "25",  # Set framerate explicitly
-    "-vsync", "cfr",  # Constant frame rate (important for timing!)
-    
-    # Audio settings
-    "-c:a", "aac",
-    "-b:a", "192k",
-    "-ar", "48000",
-    "-ac", "2",
-    "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
-    
-    # Timing
-    "-t", str(total_duration),  # Explicitly set duration
-    "-shortest",
-    "-movflags", "+faststart",
-    
-    OUTPUT_VIDEO
-]
+# Check if thumbnail exists in parent folder
+video_folder = os.path.dirname(output_filename)
+thumbnail_path = os.path.join(video_folder, "thumbnail.png")
+
+# Build FFmpeg command
+if os.path.exists(thumbnail_path):
+    # WITH thumbnail embedded
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", concat_file,
+        "-i", audio_path,
+        "-i", thumbnail_path,  # ← ADD THUMBNAIL INPUT
+        
+        # Map streams
+        "-map", "0:v",  # Video from concat
+        "-map", "1:a",  # Audio from audio file
+        "-map", "2:v",  # Thumbnail as cover art
+        
+        # Video settings
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-r", "25",
+        "-vsync", "cfr",
+        
+        # Thumbnail settings
+        "-c:v:1", "png",  # ← Encode thumbnail as PNG
+        "-disposition:v:1", "attached_pic",  # ← Mark as cover art
+        
+        # Audio settings
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
+        
+        # Duration
+        "-t", str(total_duration),
+        "-shortest",
+        "-movflags", "+faststart",
+        
+        output_filename
+    ]
+else:
+    # WITHOUT thumbnail (original command)
+    cmd = [
+        "ffmpeg", "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", concat_file,
+        "-i", audio_path,
+        
+        # Video settings
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-r", "25",
+        "-vsync", "cfr",
+        
+        # Audio settings
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-ar", "48000",
+        "-ac", "2",
+        "-af", "pan=stereo|c0=c0|c1=c0,volume=3.0",
+        
+        # Duration
+        "-t", str(total_duration),
+        "-shortest",
+        "-movflags", "+faststart",
+        
+        output_filename
+    ]
 
 try:
     result = subprocess.run(
